@@ -40,7 +40,7 @@ export default defineConfig({
       ],
     },
     outline: {
-      level: [2, 3],
+      level: [2, 4], // 显示 H2～H4，包含 top10/top30 等四级标题
     },
     footer: {
       message: (() => {

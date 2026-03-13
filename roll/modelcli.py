@@ -49,7 +49,7 @@ class ModelCLI:
     def __init__(self, region=REG_CN, **kwargs):
         self.kwargs = kwargs
         self._init_qlib(region)
-        self.review_result_string = ""
+        self.review_result_string = "# 复盘统计分析\n"
 
     def _init_qlib(self, region):
         """初始化 Qlib 配置"""
@@ -451,7 +451,7 @@ class ModelCLI:
 
     def _review_subdir(self, subdir):
         print(f"- {subdir.name}")
-        self.review_result_string += f"# {subdir.name}\n"
+        self.review_result_string += f"## {subdir.name}\n"
         # 优化：集中提取日期，减少冗余检查
         date_str = next(
             (
@@ -469,6 +469,7 @@ class ModelCLI:
         trade_data_list = get_trade_data(self.kwargs.get("provider_uri"))
         if date_str and trade_data_list and date_str in trade_data_list[-2:]:
             logger.info(f"还不能复盘 {date_str}")
+            self.review_result_string += f"\n{subdir.name} 还不能复盘 {date_str}\n"
             return
 
         next1_date = None
@@ -535,14 +536,26 @@ class ModelCLI:
         next2_date_original_data = self.get_orignal_data(dates={"start": next2_date, "end": next2_date})
 
         print("分析 df_ret:")
-        self.review_result_string += f"## {date_str}_ret.csv\n"
+        self.review_result_string += f"### {date_str}_ret.csv\n"
         stats_df, result_string = self._review_csv(df_ret, real_df, next1_date_original_data, next2_date_original_data)
-        self.review_result_string += result_string
+
+
+        # 使用 groupby('top_num') 来遍历 stats_df
+        if stats_df is not None and 'top_num' in stats_df.columns:
+            for top_num, group in stats_df.groupby('top_num'):
+                # 按 top_num 分组汇总结果字符串
+                self.review_result_string += f"\n#### top{top_num}\n"
+                self.review_result_string += group.to_markdown(index=False) + "\n"
 
         print("分析 df_filter_ret:")
-        self.review_result_string += f"## {date_str}_filter_ret.csv\n"
+        self.review_result_string += f"### {date_str}_filter_ret.csv\n"
         stats_df, result_string = self._review_csv(df_filter_ret, real_df, next1_date_original_data, next2_date_original_data)
-        self.review_result_string += result_string
+        # 使用 groupby('top_num') 来遍历 stats_df
+        if stats_df is not None and 'top_num' in stats_df.columns:
+            for top_num, group in stats_df.groupby('top_num'):
+                # 按 top_num 分组汇总结果字符串
+                self.review_result_string += f"\n#### top{top_num}\n"
+                self.review_result_string += group.to_markdown(index=False) + "\n"
 
     def review(self):
         """马后炮"""
@@ -569,5 +582,5 @@ class ModelCLI:
         for subdir in sorted_subdirs:
             self._review_subdir(subdir)
         print(self.review_result_string)
-        append_to_file("/tmp/review_result.md", self.review_result_string, mode='w')
+        append_to_file("/tmp/review_result.md", self.review_result_string, mmode='w')
         logger.info(f"review result saved to /tmp/review_result.md")

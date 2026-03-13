@@ -125,10 +125,10 @@ def get_real_github_hash(repo_url: str, target_filename: str) -> Optional[str]:
         logger.error(f"解析 GitHub 哈希失败: {e}")
     return None
 
-def append_to_file(file_path: Union[str, Path], content: str, mode: str = 'a'):
+def append_to_file(file_path: Union[str, Path], content: str, mmode: str = 'a'):
     """追加内容到文件"""
     try:
-        with open(file_path, mode='a', encoding=DEFAULT_ENCODING) as f:
+        with open(file_path, mode=mmode, encoding=DEFAULT_ENCODING) as f:
             f.write(content)
     except Exception as e:
         logger.error(f"文件追加失败: {e}")
