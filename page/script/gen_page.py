@@ -172,14 +172,17 @@ def generate_pages_auto() -> None:
         md_files = sorted(md_files, key=lambda x: x.stem)
 
         # 只生成侧边栏，不修改 index.md 正文
+        rel_path = f'/pages/{subdir_name}'
         sidebar_items = [
-            {'text': title, 'link': f'/pages/{subdir_name}/'},
+            {'text': title, 'link': f'{rel_path}/'},
         ]
         for f in md_files:
             display = _get_md_title(f)
-            sidebar_items.append({'text': display, 'link': f'/pages/{subdir_name}/{f.stem}'})
+            sidebar_items.append({'text': display, 'link': f'{rel_path}/{f.stem}'})
 
-        pages_sidebar[f'/pages/{subdir_name}/'] = sidebar_items
+        # GitHub Pages 部署时 route 含 base，需两种 key 以兼容 dev 与 prod
+        pages_sidebar[f'{rel_path}/'] = sidebar_items
+        pages_sidebar[f'/qlibAssistant{rel_path}/'] = sidebar_items
 
     # 写入 sidebar-pages.generated.ts
     _write_sidebar_pages(pages_sidebar)
