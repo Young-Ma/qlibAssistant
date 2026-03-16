@@ -4,6 +4,7 @@ pandas
 numpy
 pyqlib
 xgboost
+catboost
 
 # 命令行工具与进度条
 fire 

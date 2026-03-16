@@ -28,7 +28,7 @@ CATBOOST_MODEL = {
         "num_leaves": 100,
         "thread_count": 20, 
         "grow_policy": "Lossguide",
-        "bootstrap_type": "Poisson"
+        "bootstrap_type": "MVS"
     }
 }
 

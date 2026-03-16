@@ -5,7 +5,7 @@ from loguru import logger
 
 def run_batch_experiments():
     # 1. 定义参数列表
-    model_names = ["XGBoost", "Linear", "DoubleEnsemble", "LightGBM"]
+    model_names = ["XGBoost", "Linear", "DoubleEnsemble", "LightGBM", "CatBoost"]
     dataset_names = ["Alpha158"] #, "Alpha360"]
     stock_pools = ["csi300"] #, "csi500"]
     rolling_types = ["custom"]
