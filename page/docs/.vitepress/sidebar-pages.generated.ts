@@ -10,6 +10,12 @@ export const pagesSidebar = {
     { text: '帮助', link: '/pages/about/' },
     { text: '示例子页', link: '/pages/about/example' },
   ],
+  '/pages/changelog/': [
+    { text: 'changelog', link: '/pages/changelog/' },
+  ],
+  '/qlibAssistant/pages/changelog/': [
+    { text: 'changelog', link: '/pages/changelog/' },
+  ],
   '/pages/docs/': [
     { text: '文档', link: '/pages/docs/' },
     { text: '示例子页', link: '/pages/docs/example' },
@@ -29,10 +35,12 @@ export const pagesSidebar = {
   '/pages/mahoupao/': [
     { text: '马后炮', link: '/pages/mahoupao/' },
     { text: '示例分析', link: '/pages/mahoupao/example' },
+    { text: '复盘统计分析', link: '/pages/mahoupao/review_result' },
   ],
   '/qlibAssistant/pages/mahoupao/': [
     { text: '马后炮', link: '/pages/mahoupao/' },
     { text: '示例分析', link: '/pages/mahoupao/example' },
+    { text: '复盘统计分析', link: '/pages/mahoupao/review_result' },
   ],
   '/pages/notes/': [
     { text: 'notes', link: '/pages/notes/' },
