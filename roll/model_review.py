@@ -5,7 +5,7 @@ from typing import Dict
 import pandas as pd
 from loguru import logger
 
-from utils import append_to_file, get_trade_date
+from utils import append_to_file, TradeDate
 
 
 class ModelReviewHelper:
@@ -22,6 +22,8 @@ class ModelReviewHelper:
         )
         self.review_result_df = {}
         self.review_result_df_filter = {}
+        self.trade_date = TradeDate(self.kwargs.get("provider_uri"))
+
 
     # ---------- CSV 单日回测 ----------
     def _review_csv(self, df, real_df, n1, n2):
@@ -111,38 +113,19 @@ class ModelReviewHelper:
         else:
             print("未发现格式为 xxxx-xx-xx_ 的 CSV 文件名")
 
-        trade_date_list = get_trade_date(self.kwargs.get("provider_uri"))
-        if not date_str:
-            logger.info(f"{subdir.name} 未提取到有效日期，不能复盘")
-            self.review_result_string += f"\n{subdir.name} 未提取到有效日期，不能复盘\n"
-            return
-
-        if not trade_date_list:
-            logger.info(f"{subdir.name} 交易日日历为空，不能复盘 {date_str}")
-            self.review_result_string += (
-                f"\n{subdir.name} 交易日日历为空，不能复盘 {date_str}\n"
-            )
-            return
-
-        try:
-            idx = trade_date_list.index(date_str)
-        except ValueError:
+        idx = self.trade_date.get_date_index(date_str)
+        if idx is None:
             logger.info(f"{subdir.name} 日期 {date_str} 不在交易日日历中，不能复盘")
-            self.review_result_string += (
-                f"\n{subdir.name} 日期 {date_str} 不在交易日日历中，不能复盘\n"
-            )
             return
 
         # 复盘依赖下一个与下下个交易日，任一缺失都不执行复盘。
-        if idx + 2 >= len(trade_date_list):
+        if idx + 2 >= len(self.trade_date.get_trade_date_list()):
             logger.info(f"还不能复盘 {date_str}")
-            self.review_result_string += (
-                f"\n{subdir.name} 还不能复盘 {date_str}（后续交易日不足）\n"
-            )
+            self.review_result_string += f"还不能复盘 {date_str}\n"
             return
 
-        next1_date = trade_date_list[idx + 1]
-        next2_date = trade_date_list[idx + 2]
+        next1_date = self.trade_date.get_next_date(date_str, 1) if idx + 1 < len(self.trade_date.get_trade_date_list()) else None
+        next2_date = self.trade_date.get_next_date(date_str, 2) if idx + 2 < len(self.trade_date.get_trade_date_list()) else None
 
         logger.info(
             f"开始复盘 {date_str if date_str else '[未知日期]'}  "
@@ -150,28 +133,8 @@ class ModelReviewHelper:
             f"下2个交易日: {next2_date if next2_date else '[未知日期]'}]"
         )
 
-        df_filter_ret, df_ret = None, None
-        if date_str:
-            filter_ret_path = subdir / f"{date_str}_filter_ret.csv"
-            ret_path = subdir / f"{date_str}_ret.csv"
-
-            if filter_ret_path.exists():
-                try:
-                    df_filter_ret = pd.read_csv(filter_ret_path)
-                    print(f"已读取: {filter_ret_path.name}, 行数: {len(df_filter_ret)}")
-                except Exception as e:
-                    print(f"读取 {filter_ret_path.name} 出错: {e}")
-            else:
-                print(f"  未找到: {filter_ret_path.name}")
-
-            if ret_path.exists():
-                try:
-                    df_ret = pd.read_csv(ret_path)
-                    print(f"已读取: {ret_path.name}, 行数: {len(df_ret)}")
-                except Exception as e:
-                    print(f"读取 {ret_path.name} 出错: {e}")
-            else:
-                print(f"未找到: {ret_path.name}")
+        df_filter_ret = pd.read_csv(subdir / f"{date_str}_filter_ret.csv")
+        df_ret = pd.read_csv(subdir / f"{date_str}_ret.csv")
 
         real_df = self.cli.get_real_label(dates={"start": date_str, "end": date_str})
         real_df = real_df.reset_index()

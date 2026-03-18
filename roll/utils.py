@@ -240,10 +240,6 @@ def get_local_data_date(provider_uri):
     _, stdout, _ = run_command(f"tail -n 1 {provider_uri}/calendars/day.txt")
     return stdout
 
-def get_trade_date(provider_uri):
-    _, stdout, _ = run_command(f"cat {provider_uri}/calendars/day.txt")
-    return stdout.split("\n")
-
 def fix_mlflow_paths(mlruns_dir: Optional[str] = None):
     """精准修复 MLflow 配置文件中的用户路径"""
     current_home = str(Path.home())
@@ -331,3 +327,34 @@ def generate_qlib_segments(months_total=12, end_date_str=None):
     }
 
     return segments
+
+
+# 管理本地数据的交易日列表
+class TradeDate:
+    # 初始化交易日列表
+    def __init__(self, provider_uri):
+        self.provider_uri = provider_uri
+        self.trade_date_file = f"{self.provider_uri}/calendars/day.txt"
+        _, stdout, _ = run_command(f"cat {self.trade_date_file}")
+        self.trade_date_list = stdout.split("\n")
+
+    # 获取 start_date 和 end_date 之间的交易日列表
+    def get_date_range(self, start_date, end_date):
+        idx_s = self.trade_date_list.index(start_date)
+        idx_e = self.trade_date_list.index(end_date)
+        return self.trade_date_list[idx_s + 1: idx_e]
+
+    # 获取所有交易日列表
+    def get_trade_date_list(self):
+        return self.trade_date_list
+
+    # 获取指定日期的索引
+    def get_date_index(self, date):
+        return self.trade_date_list.index(date)
+
+    # 获取指定日期之后的第 idx 个交易日
+    def get_next_date(self, date, idx):
+        i = self.get_date_index(date)
+        if i + idx >= len(self.trade_date_list):
+            return self.trade_date_list[-1]
+        return self.trade_date_list[i + idx]
