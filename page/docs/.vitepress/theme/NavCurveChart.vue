@@ -1,33 +1,37 @@
 <template>
   <div>
     <div class="kpi-bar">
-      <div v-for="item in kpiItems" :key="item.label" class="kpi-card">
-        <div class="kpi-label">{{ item.label }}</div>
-        <div class="kpi-value">{{ item.value }}</div>
+      <div v-for="kpi in kpis" :key="kpi.label" class="kpi-card">
+        <div class="kpi-label">{{ kpi.label }}</div>
+        <div class="kpi-value">{{ kpi.value }}</div>
       </div>
     </div>
+
+    <div class="legend">
+      <span class="legend-item"><i class="legend-dot strategy"></i>策略净值</span>
+      <span class="legend-item"><i class="legend-dot benchmark"></i>CSI300净值</span>
+      <span class="legend-item"><i class="legend-dot drawdown"></i>水下回撤</span>
+    </div>
+
     <div ref="hostEl" class="chart-host"></div>
     <p class="chart-status">{{ statusText }}</p>
-    <div class="legend">
-      <span class="legend-item">
-        <i class="legend-dot strategy"></i>
-        策略净值
-      </span>
-      <span class="legend-item">
-        <i class="legend-dot benchmark"></i>
-        CSI300净值
-      </span>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { createChart, LineSeries, AreaSeries, CrosshairMode } from "lightweight-charts";
 
+const props = defineProps({
+  strategy: {
+    type: String,
+    required: true,
+  },
+});
+
 const hostEl = ref(null);
-const statusText = ref("");
-const kpiItems = ref([
+const statusText = ref("正在加载图表...");
+const kpis = ref([
   { label: "策略累计", value: "--" },
   { label: "基准累计", value: "--" },
   { label: "超额累计", value: "--" },
@@ -36,55 +40,73 @@ const kpiItems = ref([
   { label: "日胜率", value: "--" },
 ]);
 
-function normalizeData(rawRows) {
-  if (!Array.isArray(rawRows)) return { strategy: [], benchmark: [] };
+let mainChart = null;
+let ddChart = null;
+let resizeHandler = null;
 
-  const strategy = [];
-  const benchmark = [];
+const COLORS = {
+  strategy: "#2563eb",
+  benchmark: "#ef4444",
+  drawdownLine: "#475569",
+  drawdownTop: "rgba(71, 85, 105, 0.30)",
+  drawdownBottom: "rgba(71, 85, 105, 0.06)",
+};
 
-  for (const row of rawRows) {
-    const rawTime = row.date || row.time;
-    const d = rawTime ? new Date(rawTime) : null;
-    const time = d && Number.isFinite(d.getTime()) ? Math.floor(d.getTime() / 1000) : null;
-    const strategyValue = Number(
-      row.strategy_equity ?? row.strategy_nav ?? row.strategy
-    );
-    const benchmarkValue = Number(
-      row.csi300_equity ?? row.benchmark_nav ?? row.csi300
-    );
-
-    if (time && Number.isFinite(strategyValue)) {
-      strategy.push({ time, value: strategyValue });
-    }
-    if (time && Number.isFinite(benchmarkValue)) {
-      benchmark.push({ time, value: benchmarkValue });
-    }
-  }
-
-  return { strategy, benchmark };
+function resolveDataUrl(path) {
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
+  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-function resolveDataUrls() {
-  const base = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
-  return [
-    `${base}/data/mahoupao_nav_curve.json`,
-    "/data/mahoupao_nav_curve.json",
-  ];
+function dateToTs(dateStr) {
+  const d = new Date(`${String(dateStr).slice(0, 10)}T00:00:00Z`);
+  return Math.floor(d.getTime() / 1000);
 }
 
 function fmtPct(x) {
   return Number.isFinite(x) ? `${(x * 100).toFixed(2)}%` : "--";
 }
 
-function calcDrawdown(strategySeries) {
-  let maxVal = -Infinity;
-  const drawdown = [];
-  for (const p of strategySeries) {
-    if (p.value > maxVal) maxVal = p.value;
-    const dd = maxVal > 0 ? p.value / maxVal - 1 : 0;
-    drawdown.push({ time: p.time, value: dd });
+function parseCsv(text) {
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",");
+  const rows = [];
+  for (const line of lines.slice(1)) {
+    const cols = line.split(",");
+    const row = {};
+    headers.forEach((h, i) => {
+      row[h] = cols[i] ?? "";
+    });
+    rows.push(row);
   }
-  return drawdown;
+  return rows;
+}
+
+function buildSeries(rows) {
+  const strategy = [];
+  const benchmark = [];
+  for (const row of rows) {
+    const time = dateToTs(row.date);
+    const s = Number(row.strategy_equity);
+    const b = Number(row.csi300_equity);
+    if (Number.isFinite(time) && Number.isFinite(s)) {
+      strategy.push({ time, value: s });
+    }
+    if (Number.isFinite(time) && Number.isFinite(b)) {
+      benchmark.push({ time, value: b });
+    }
+  }
+  strategy.sort((x, y) => x.time - y.time);
+  benchmark.sort((x, y) => x.time - y.time);
+  return { strategy, benchmark };
+}
+
+function calcDrawdown(series) {
+  let maxVal = -Infinity;
+  return series.map((p) => {
+    if (p.value > maxVal) maxVal = p.value;
+    return { time: p.time, value: maxVal > 0 ? p.value / maxVal - 1 : 0 };
+  });
 }
 
 function calcKpis(strategy, benchmark, drawdown) {
@@ -115,7 +137,7 @@ function calcKpis(strategy, benchmark, drawdown) {
   }
   const winRate = total > 0 ? win / total : NaN;
 
-  kpiItems.value = [
+  kpis.value = [
     { label: "策略累计", value: fmtPct(strategyCum) },
     { label: "基准累计", value: fmtPct(benchmarkCum) },
     { label: "超额累计", value: fmtPct(excessCum) },
@@ -125,25 +147,32 @@ function calcKpis(strategy, benchmark, drawdown) {
   ];
 }
 
+function formatDate(ts) {
+  const d = new Date(Number(ts) * 1000);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 onMounted(async () => {
   if (!hostEl.value) return;
 
   const shadowRoot = hostEl.value.attachShadow({ mode: "open" });
   const styleEl = document.createElement("style");
   styleEl.textContent = `
-    .chart-main-wrap {
+    .main-wrap {
       position: relative;
-      height: 430px;
       width: 100%;
+      height: 420px;
       border: 1px solid #e2e8f0;
       border-radius: 8px 8px 0 0;
       overflow: hidden;
       background: #ffffff;
     }
-    .chart-dd-wrap {
-      position: relative;
-      height: 140px;
+    .dd-wrap {
       width: 100%;
+      height: 170px;
       border: 1px solid #e2e8f0;
       border-top: 0;
       border-radius: 0 0 8px 8px;
@@ -155,82 +184,53 @@ onMounted(async () => {
       top: 10px;
       left: 10px;
       z-index: 10;
-      min-width: 250px;
+      min-width: 280px;
       padding: 8px 10px;
       border-radius: 6px;
       border: 1px solid #dbe5f1;
       background: rgba(255, 255, 255, 0.92);
-      backdrop-filter: blur(2px);
       color: #334155;
       font-size: 12px;
       line-height: 1.5;
       box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
       pointer-events: none;
     }
-    .overlay .date {
-      font-weight: 600;
-      margin-bottom: 2px;
-      color: #0f172a;
-    }
-    .overlay .row {
+    .date { font-weight: 600; margin-bottom: 2px; color: #0f172a; }
+    .row {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       white-space: nowrap;
     }
-    .overlay .k {
-      color: #64748b;
-    }
-    .overlay .v.strategy {
-      color: #2563eb;
-      font-weight: 600;
-    }
-    .overlay .v.benchmark {
-      color: #ef4444;
-      font-weight: 600;
-    }
-    .overlay .v.excess {
-      color: #0f172a;
-      font-weight: 600;
-    }
-    .overlay .v.drawdown {
-      color: #334155;
-      font-weight: 600;
-    }
+    .k { color: #64748b; }
+    .v { color: #0f172a; font-weight: 600; }
   `;
-  const chartMainWrap = document.createElement("div");
-  chartMainWrap.className = "chart-main-wrap";
-  const chartDdWrap = document.createElement("div");
-  chartDdWrap.className = "chart-dd-wrap";
+
+  const mainWrap = document.createElement("div");
+  mainWrap.className = "main-wrap";
+  const ddWrap = document.createElement("div");
+  ddWrap.className = "dd-wrap";
   const overlay = document.createElement("div");
   overlay.className = "overlay";
   overlay.innerHTML = `
     <div class="date">--</div>
-    <div class="row"><span class="k">策略净值</span><span class="v strategy">--</span></div>
-    <div class="row"><span class="k">CSI300净值</span><span class="v benchmark">--</span></div>
-    <div class="row"><span class="k">超额(策略-基准)</span><span class="v excess">--</span></div>
-    <div class="row"><span class="k">回撤</span><span class="v drawdown">--</span></div>
+    <div class="row"><span class="k">策略净值</span><span class="v">--</span></div>
+    <div class="row"><span class="k">CSI300净值</span><span class="v">--</span></div>
+    <div class="row"><span class="k">超额</span><span class="v">--</span></div>
+    <div class="row"><span class="k">回撤</span><span class="v">--</span></div>
   `;
-  shadowRoot.appendChild(styleEl);
-  shadowRoot.appendChild(chartMainWrap);
-  shadowRoot.appendChild(chartDdWrap);
-  chartMainWrap.appendChild(overlay);
 
-  const mainChart = createChart(chartMainWrap, {
+  shadowRoot.appendChild(styleEl);
+  shadowRoot.appendChild(mainWrap);
+  shadowRoot.appendChild(ddWrap);
+  mainWrap.appendChild(overlay);
+
+  mainChart = createChart(mainWrap, {
     width: hostEl.value.clientWidth,
-    height: 430,
-    layout: {
-      background: { color: "#ffffff" },
-      textColor: "#334155",
-    },
-    localization: {
-      locale: "zh-CN",
-      dateFormat: "yyyy-MM-dd",
-    },
-    grid: {
-      vertLines: { color: "#eef2f7" },
-      horzLines: { color: "#eef2f7" },
-    },
+    height: 420,
+    layout: { background: { color: "#ffffff" }, textColor: "#334155" },
+    localization: { locale: "zh-CN", dateFormat: "yyyy-MM-dd" },
+    grid: { vertLines: { color: "#eef2f7" }, horzLines: { color: "#eef2f7" } },
     rightPriceScale: { borderColor: "#e2e8f0" },
     timeScale: {
       visible: false,
@@ -245,21 +245,13 @@ onMounted(async () => {
     crosshair: { mode: CrosshairMode.Normal },
   });
 
-  const ddChart = createChart(chartDdWrap, {
+  ddChart = createChart(ddWrap, {
     width: hostEl.value.clientWidth,
-    height: 140,
-    layout: {
-      background: { color: "#ffffff" },
-      textColor: "#334155",
-    },
-    grid: {
-      vertLines: { color: "#eef2f7" },
-      horzLines: { color: "#eef2f7" },
-    },
-    rightPriceScale: {
-      borderColor: "#e2e8f0",
-      scaleMargins: { top: 0.15, bottom: 0.12 },
-    },
+    height: 170,
+    layout: { background: { color: "#ffffff" }, textColor: "#334155" },
+    localization: { locale: "zh-CN", dateFormat: "yyyy-MM-dd" },
+    grid: { vertLines: { color: "#eef2f7" }, horzLines: { color: "#eef2f7" } },
+    rightPriceScale: { borderColor: "#e2e8f0", scaleMargins: { top: 0.15, bottom: 0.12 } },
     timeScale: {
       visible: true,
       borderColor: "#e2e8f0",
@@ -270,172 +262,125 @@ onMounted(async () => {
       fixLeftEdge: true,
       fixRightEdge: true,
     },
-    localization: {
-      locale: "zh-CN",
-      dateFormat: "yyyy-MM-dd",
-    },
     crosshair: { mode: CrosshairMode.Normal },
   });
 
   const strategySeries = mainChart.addSeries(LineSeries, {
-    title: "Strategy",
-    color: "#2563eb",
+    title: `${props.strategy} strategy`,
+    color: COLORS.strategy,
     lineWidth: 2,
   });
-
   const benchmarkSeries = mainChart.addSeries(LineSeries, {
-    title: "CSI300",
-    color: "#ef4444",
+    title: `${props.strategy} csi300`,
+    color: COLORS.benchmark,
     lineWidth: 2,
   });
-
-  const drawdownSeries = ddChart.addSeries(AreaSeries, {
-    title: "Drawdown",
-    lineColor: "#475569",
-    topColor: "rgba(71, 85, 105, 0.35)",
-    bottomColor: "rgba(71, 85, 105, 0.05)",
+  const ddSeries = ddChart.addSeries(AreaSeries, {
+    title: `${props.strategy} drawdown`,
+    lineColor: COLORS.drawdownLine,
+    topColor: COLORS.drawdownTop,
+    bottomColor: COLORS.drawdownBottom,
     lineWidth: 1,
     priceFormat: { type: "price", precision: 2, minMove: 0.01 },
   });
 
-  let strategyMap = new Map();
-  let benchmarkMap = new Map();
-  let drawdownMap = new Map();
-
-  const formatDate = (time) => {
-    if (typeof time === "number") {
-      const d = new Date(time * 1000);
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const dd = String(d.getDate()).padStart(2, "0");
-      return `${yyyy}-${mm}-${dd}`;
-    }
-    if (time && typeof time === "object" && "year" in time) {
-      const mm = String(time.month).padStart(2, "0");
-      const dd = String(time.day).padStart(2, "0");
-      return `${time.year}-${mm}-${dd}`;
-    }
-    return "--";
-  };
-
-  const updateOverlay = (dateStr, strategyVal, benchmarkVal, drawdownVal) => {
-    const strategyText = Number.isFinite(strategyVal) ? strategyVal.toFixed(4) : "--";
-    const benchmarkText = Number.isFinite(benchmarkVal) ? benchmarkVal.toFixed(4) : "--";
-    const excess = Number.isFinite(strategyVal) && Number.isFinite(benchmarkVal)
-      ? (strategyVal - benchmarkVal).toFixed(4)
-      : "--";
-    const drawdownText = Number.isFinite(drawdownVal) ? `${(drawdownVal * 100).toFixed(2)}%` : "--";
-
-    overlay.innerHTML = `
-      <div class="date">${dateStr}</div>
-      <div class="row"><span class="k">策略净值</span><span class="v strategy">${strategyText}</span></div>
-      <div class="row"><span class="k">CSI300净值</span><span class="v benchmark">${benchmarkText}</span></div>
-      <div class="row"><span class="k">超额(策略-基准)</span><span class="v excess">${excess}</span></div>
-      <div class="row"><span class="k">回撤</span><span class="v drawdown">${drawdownText}</span></div>
-    `;
-  };
-
   try {
-    let data = null;
-    for (const url of resolveDataUrls()) {
-      const res = await fetch(url);
-      if (res.ok) {
-        data = await res.json();
-        break;
-      }
-    }
-    if (!data) {
-      throw new Error("无法读取净值数据文件");
-    }
+    const res = await fetch(resolveDataUrl(`/backtest_csv/${props.strategy}.csv`));
+    if (!res.ok) throw new Error(`读取 ${props.strategy}.csv 失败: ${res.status}`);
+    const rows = parseCsv(await res.text());
+    const { strategy, benchmark } = buildSeries(rows);
+    if (!strategy.length || !benchmark.length) throw new Error("策略或基准数据为空");
 
-    const { strategy, benchmark } = normalizeData(data);
-    if (!strategy.length && !benchmark.length) {
-      throw new Error("数据为空或字段名不匹配");
-    }
+    const drawdown = calcDrawdown(strategy);
+    calcKpis(strategy, benchmark, drawdown);
 
     strategySeries.setData(strategy);
     benchmarkSeries.setData(benchmark);
-    const drawdown = calcDrawdown(strategy);
-    drawdownSeries.setData(drawdown.map((d) => ({ time: d.time, value: d.value * 100 })));
-    calcKpis(strategy, benchmark, drawdown);
-    strategyMap = new Map(strategy.map((d) => [d.time, d.value]));
-    benchmarkMap = new Map(benchmark.map((d) => [d.time, d.value]));
-    drawdownMap = new Map(drawdown.map((d) => [d.time, d.value]));
+    ddSeries.setData(drawdown.map((d) => ({ time: d.time, value: d.value * 100 })));
     mainChart.timeScale().fitContent();
     ddChart.timeScale().fitContent();
-    const lastTime = strategy.length
-      ? strategy[strategy.length - 1].time
-      : benchmark[benchmark.length - 1].time;
-    updateOverlay(
-      formatDate(lastTime),
-      strategyMap.get(lastTime),
-      benchmarkMap.get(lastTime),
-      drawdownMap.get(lastTime)
-    );
-    statusText.value = `加载成功：${Math.max(strategy.length, benchmark.length)} 个交易日`;
+
+    const strategyMap = new Map(strategy.map((p) => [p.time, p.value]));
+    const benchmarkMap = new Map(benchmark.map((p) => [p.time, p.value]));
+    const drawdownMap = new Map(drawdown.map((p) => [p.time, p.value]));
+
+    const updateOverlay = (time) => {
+      const s = strategyMap.get(time);
+      const b = benchmarkMap.get(time);
+      const d = drawdownMap.get(time);
+      const sText = Number.isFinite(s) ? s.toFixed(4) : "--";
+      const bText = Number.isFinite(b) ? b.toFixed(4) : "--";
+      const eText = Number.isFinite(s) && Number.isFinite(b) ? (s - b).toFixed(4) : "--";
+      const dText = Number.isFinite(d) ? `${(d * 100).toFixed(2)}%` : "--";
+      overlay.innerHTML = `
+        <div class="date">${formatDate(time)}</div>
+        <div class="row"><span class="k">策略净值</span><span class="v">${sText}</span></div>
+        <div class="row"><span class="k">CSI300净值</span><span class="v">${bText}</span></div>
+        <div class="row"><span class="k">超额</span><span class="v">${eText}</span></div>
+        <div class="row"><span class="k">回撤</span><span class="v">${dText}</span></div>
+      `;
+    };
+
+    const last = strategy[strategy.length - 1];
+    if (last) updateOverlay(last.time);
+
+    mainChart.subscribeCrosshairMove((param) => {
+      if (!param || !param.time) return;
+      updateOverlay(param.time);
+    });
+    ddChart.subscribeCrosshairMove((param) => {
+      if (!param || !param.time) return;
+      updateOverlay(param.time);
+    });
+
+    let syncing = false;
+    mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (syncing || !range) return;
+      syncing = true;
+      ddChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    });
+    ddChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (syncing || !range) return;
+      syncing = true;
+      mainChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    });
+
+    statusText.value = `已加载：${props.strategy}`;
   } catch (err) {
-    console.error("加载净值数据失败:", err);
+    console.error("加载策略图失败:", err);
     statusText.value = `加载失败：${String(err)}`;
   }
 
-  const syncFromTime = (time) => {
-    const dateStr = formatDate(time);
-    const strategyVal = typeof time === "number" ? strategyMap.get(time) : null;
-    const benchmarkVal = typeof time === "number" ? benchmarkMap.get(time) : null;
-    const drawdownVal = typeof time === "number" ? drawdownMap.get(time) : null;
-    updateOverlay(dateStr, strategyVal, benchmarkVal, drawdownVal);
+  resizeHandler = () => {
+    if (!hostEl.value || !mainChart || !ddChart) return;
+    mainChart.resize(hostEl.value.clientWidth, 420);
+    ddChart.resize(hostEl.value.clientWidth, 170);
   };
+  window.addEventListener("resize", resizeHandler);
+});
 
-  mainChart.subscribeCrosshairMove((param) => {
-    if (!param || !param.time) return;
-    const strategyPoint = param.seriesData.get(strategySeries);
-    const benchmarkPoint = param.seriesData.get(benchmarkSeries);
-    const strategyVal = strategyPoint && "value" in strategyPoint ? strategyPoint.value : strategyMap.get(param.time);
-    const benchmarkVal = benchmarkPoint && "value" in benchmarkPoint ? benchmarkPoint.value : benchmarkMap.get(param.time);
-    updateOverlay(formatDate(param.time), strategyVal, benchmarkVal, drawdownMap.get(param.time));
-  });
-
-  ddChart.subscribeCrosshairMove((param) => {
-    if (!param || !param.time) return;
-    syncFromTime(param.time);
-  });
-
-  let syncing = false;
-  mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-    if (syncing || !range) return;
-    syncing = true;
-    ddChart.timeScale().setVisibleLogicalRange(range);
-    syncing = false;
-  });
-  ddChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-    if (syncing || !range) return;
-    syncing = true;
-    mainChart.timeScale().setVisibleLogicalRange(range);
-    syncing = false;
-  });
-
-  window.addEventListener("resize", () => {
-    if (hostEl.value) {
-      mainChart.resize(hostEl.value.clientWidth, 430);
-      ddChart.resize(hostEl.value.clientWidth, 140);
-    }
-  });
+onBeforeUnmount(() => {
+  if (resizeHandler) window.removeEventListener("resize", resizeHandler);
+  if (mainChart) mainChart.remove();
+  if (ddChart) ddChart.remove();
 });
 </script>
 
 <style scoped>
 .kpi-bar {
   display: grid;
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .kpi-card {
   border: 1px solid var(--vp-c-divider);
   border-radius: 8px;
   padding: 8px 10px;
-  background: var(--vp-c-bg-soft);
+  background: var(--vp-c-bg);
 }
 
 .kpi-label {
@@ -450,9 +395,32 @@ onMounted(async () => {
   color: var(--vp-c-text-1);
 }
 
-.chart-host {
-  width: 100%;
+.legend {
+  display: inline-flex;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--vp-c-text-2);
 }
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-dot.strategy { background: #2563eb; }
+.legend-dot.benchmark { background: #ef4444; }
+.legend-dot.drawdown { background: #475569; }
+
+.chart-host { width: 100%; }
 
 .chart-status {
   margin-top: 8px;
@@ -460,33 +428,9 @@ onMounted(async () => {
   font-size: 13px;
 }
 
-.legend {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--vp-c-text-2);
-}
-
-.legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.legend-dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-}
-
-.legend-dot.strategy {
-  background: #2563eb;
-}
-
-.legend-dot.benchmark {
-  background: #ef4444;
+@media (max-width: 1100px) {
+  .kpi-bar {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
 }
 </style>
