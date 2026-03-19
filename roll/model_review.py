@@ -217,18 +217,12 @@ class ModelReviewHelper:
         pprint(self.review_result_df)
         pprint(self.review_result_df_filter)
 
-    def backtest(self):
+
+    # ---------- 追加复盘结果----------
+    def append_review_result(self, date_list):
         sorted_subdirs = self._get_review_subdirs()
         if sorted_subdirs is None:
             return
-        date_list = [self._extract_date_from_csv_name(sorted_subdirs[-1]), self._extract_date_from_csv_name(sorted_subdirs[0])]
-        logger.info(f"backtest data list: {date_list}")
-
-        csi300_df = self.cli.get_real_label_csi300(dates={"start": date_list[0], "end": date_list[1]}).reset_index()
-        csi300_df = csi300_df.rename(columns={"real_label": "csi300_real_label"})
-
-        date_range_list = self.trade_date.get_date_range(date_list[0], date_list[1])
-
         real_df = self.cli.get_real_label(dates={"start": date_list[0], "end": date_list[1]})
         real_df = real_df.reset_index()
         real_df["datetime"] = pd.to_datetime(real_df["datetime"])
@@ -246,7 +240,44 @@ class ModelReviewHelper:
 
             self.review_result_df[date_str] = df_ret
             self.review_result_df_filter[date_str] = df_filter_ret
-        
+
+    def _calculate_daily_equity(self, df, initial_cash=1.0, fee_rate=0.002):
+        """
+        df: 你截图中的表格数据
+        fee_rate: 双边交易成本 (佣金+印花税+滑点预估)
+        """
+        # 1. 预处理：去掉没有收益数据的末尾行 (NaN)
+        df = df.dropna(subset=['avg_real_label']).copy()
+
+        # 2. 计算每日扣费后的净收益率
+        # 净收益 = 原始平均收益 - (换手率 * 费率)
+        df['daily_net_ret'] = df['avg_real_label'] - (df['turnover_rate'] * fee_rate)
+
+        # 3. 计算累计净值 (核心连乘)
+        # cumprod() 会计算 (1+r1)*(1+r2)*...
+        df['strategy_equity'] = initial_cash * (1 + df['daily_net_ret']).cumprod()
+
+        # 4. 同理计算基准净值 (CSI300 通常不计手续费，作为理想参考)
+        df['csi300_equity'] = initial_cash * (1 + df['csi300_real_label']).cumprod()
+        df['max_equity'] = df['strategy_equity'].cummax()
+        df['drawdown'] = (df['strategy_equity'] - df['max_equity']) / df['max_equity']
+
+        return df
+
+    # ---------- 回测 对外入口----------
+    def backtest(self):
+        sorted_subdirs = self._get_review_subdirs()
+        if sorted_subdirs is None:
+            return
+        date_list = [self._extract_date_from_csv_name(sorted_subdirs[-1]), self._extract_date_from_csv_name(sorted_subdirs[0])]
+        logger.info(f"backtest data list: {date_list}")
+
+        csi300_df = self.cli.get_real_label_csi300(dates={"start": date_list[0], "end": date_list[1]}).reset_index()
+        csi300_df = csi300_df.rename(columns={"real_label": "csi300_real_label"})
+
+        date_range_list = self.trade_date.get_date_range(date_list[0], date_list[1])
+
+        self.append_review_result(date_list)
 
         print(date_range_list)
 
@@ -274,4 +305,24 @@ class ModelReviewHelper:
             row_dict['csi300_real_label'] = csi300_label
             df_top10.append(row_dict)
         df_top10 = pd.DataFrame(df_top10)
-        print(df_top10)
+        # 计算换手率
+        turnover_rates = []
+        for i in range(len(df_top10)):
+            if i == len(df_top10) - 1:
+                turnover_rates.append(float('nan'))
+            else:
+                curr_top = set([df_top10.loc[i, f"top{j+1}"] for j in range(10) if pd.notnull(df_top10.loc[i, f"top{j+1}"])])
+                next_top = set([df_top10.loc[i+1, f"top{j+1}"] for j in range(10) if pd.notnull(df_top10.loc[i+1, f"top{j+1}"])])
+                if len(curr_top) == 0:
+                    turnover_rates.append(float('nan'))
+                else:
+                    # 换手率定义为当前位置的 top10 有多少支被下一期 top10 替换掉
+                    changed = curr_top - next_top
+                    turnover_rate = len(changed) / 10
+                    turnover_rates.append(turnover_rate)
+        df_top10["turnover_rate"] = turnover_rates
+
+
+
+        df_equity = self._calculate_daily_equity(df_top10)
+        print(df_equity)
