@@ -1,7 +1,7 @@
 """
 通过 DoltHub HTTP SQL API 双向同步 CSV（云端 ↔ 本地）。
 
-- **pull** = 云端 → 本地（``pull <表名>`` / ``pull_all`` / ``pull_backtest_*`` 等）
+- **pull** = 云端 → 本地（``pull_*`` 六表快捷命令默认写入 ``/tmp/<表名>.csv``；亦可用通用 ``pull_table_to_csv``）
 - **push** = 本地 → 云端（``push`` / ``push_*``；合并 ``backtest_csv`` / ``review_csv`` / ``qlib_score_csv`` 用 ``push_backtest_*`` / ``push_review_*`` / ``push_qlib_score_*``；**qlib_score 目录合并上传时默认不提交 ``name`` 列**；backtest 文件名**开头数字**为 ``top_k``）
 - 读（云端 → 本地）: pull（分页 SELECT）
 - 写（本地 → 云端）: push（Write API：临时分支 DELETE + INSERT，再空 POST merge 回 main；DoltHub 写 API **不支持** ``SET NAMES``/多语句；``merge_message`` 仅打印到终端；默认按云端 DESCRIBE 列对齐，本地多出的列不提交）
@@ -1119,6 +1119,19 @@ def pull_table_to_csv(
     return out_path
 
 
+def _cli_pull_table_to_tmp_csv(table: str, path: str | None = None) -> None:
+    """CLI 用：整表分页导出为 CSV；默认 ``/tmp/<table>.csv``。"""
+    out_path = path or os.path.join("/tmp", f"{table}.csv")
+    if not TOKEN:
+        print("ℹ️  未设置 DOLT_TOKEN：公开库可读；私有库请设置 DOLT_TOKEN\n")
+    try:
+        written = pull_table_to_csv(table, out_path)
+    except DoltHubSqlError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    print(f"✅ 已拉取 `{table}` -> {written}")
+
+
 class DoltHubCLI:
     """DoltHub SQL API 命令行（Fire）：pull=云端→本地，push=本地→云端。"""
 
@@ -1285,75 +1298,72 @@ class DoltHubCLI:
         print(f"\n✅ 查询完成（{len(df)} 行）。")
 
 
-    # ----- 六张表：云端 → 本地 -----
-    def pull_qlib_score_filter_ret(
-        self,
-        qlib_score_dir: str | None = None,
-        path: str | None = None,
-        from_branch: str | None = None,
-        to_branch: str | None = None,
-        merge: bool = True,
-        insert_batch_rows: int = 80,
-        match_dolt_columns: bool = True,
-    ) -> None:
-        """
-        **本地 → 云端**：在 ``qlib_score_csv`` 下**递归**合并「文件名含 filter」的 .csv，提交到 ``qlib_score_filter_ret``。
+    def pull_all(self):
+        self.pull_qlib_score_ret()
+        self.pull_qlib_score_filter_ret()
+        self.pull_backtest_ret()
+        self.pull_backtest_filter_ret()
+        self.pull_review_ret()
+        self.pull_review_filter_ret()
 
-        默认排除 ``total.csv``；与 ``push_qlib_score_ret`` 仅文件名规则与目标表不同；需 ``DOLT_TOKEN``。
-        从云端**下载**请用：``pull qlib_score_filter_ret``（或 ``pull`` + 表名）。
+    # ----- 六张表：云端 → 本地（默认 /tmp/<表名>.csv）-----
+    def pull_qlib_score_ret(self, path: str | None = None) -> None:
         """
-        pass
-    def pull_qlib_score_ret(
-        self,
-        qlib_score_dir: str | None = None,
-        path: str | None = None,
-        from_branch: str | None = None,
-        to_branch: str | None = None,
-        merge: bool = True,
-        insert_batch_rows: int = 80,
-        match_dolt_columns: bool = True,
-    ) -> None:
-        """
-        **本地 → 云端**：在 ``qlib_score_csv`` 下**递归**合并「文件名不含 filter」的 .csv，提交到 ``qlib_score_ret``。
+        云端 → 本地：导出 ``qlib_score_ret`` 为 CSV。
 
-        默认排除 ``total.csv``；与 ``push_qlib_score_filter_ret`` 仅文件名规则与目标表不同；需 ``DOLT_TOKEN``。
-        从云端**下载**请用：``pull qlib_score_ret``。
+        :param path: 输出路径，默认 ``/tmp/qlib_score_ret.csv``
         """
-        pass
-    def pull_review_ret(
-        self,
-        review_dir: str | None = None,
-        path: str | None = None,
-        from_branch: str | None = None,
-        to_branch: str | None = None,
-        merge: bool = True,
-        insert_batch_rows: int = 80,
-        match_dolt_columns: bool = True,
-    ) -> None:
-        """
-        **本地 → 云端**：在 ``review_csv`` 下合并「文件名不含 filter」的 .csv，提交到 ``review_ret``。
+        _cli_pull_table_to_tmp_csv("qlib_score_ret", path)
 
-        与 ``push_review_filter_ret`` 仅文件名规则与目标表不同；需 ``DOLT_TOKEN``。
+    def pull_qlib_score_filter_ret(self, path: str | None = None) -> None:
         """
-        pass
-    def pull_review_filter_ret(
-        self,
-        review_dir: str | None = None,
-        path: str | None = None,
-        from_branch: str | None = None,
-        to_branch: str | None = None,
-        merge: bool = True,
-        insert_batch_rows: int = 80,
-        match_dolt_columns: bool = True,
-    ) -> None:
-        """
-        **本地 → 云端**：在 ``review_csv`` 下合并「文件名含 filter」的 .csv，提交到 ``review_filter_ret``。
+        云端 → 本地：导出 ``qlib_score_filter_ret`` 为 CSV。
 
-        与 ``push_review_ret`` 仅文件名规则与目标表不同；需 ``DOLT_TOKEN``。
+        :param path: 输出路径，默认 ``/tmp/qlib_score_filter_ret.csv``
         """
-        pass
+        _cli_pull_table_to_tmp_csv("qlib_score_filter_ret", path)
+
+    def pull_backtest_ret(self, path: str | None = None) -> None:
+        """
+        云端 → 本地：导出 ``backtest_ret`` 为 CSV。
+
+        :param path: 输出路径，默认 ``/tmp/backtest_ret.csv``
+        """
+        _cli_pull_table_to_tmp_csv("backtest_ret", path)
+
+    def pull_backtest_filter_ret(self, path: str | None = None) -> None:
+        """
+        云端 → 本地：导出 ``backtest_filter_ret`` 为 CSV。
+
+        :param path: 输出路径，默认 ``/tmp/backtest_filter_ret.csv``
+        """
+        _cli_pull_table_to_tmp_csv("backtest_filter_ret", path)
+
+    def pull_review_ret(self, path: str | None = None) -> None:
+        """
+        云端 → 本地：导出 ``review_ret`` 为 CSV。
+
+        :param path: 输出路径，默认 ``/tmp/review_ret.csv``
+        """
+        _cli_pull_table_to_tmp_csv("review_ret", path)
+
+    def pull_review_filter_ret(self, path: str | None = None) -> None:
+        """
+        云端 → 本地：导出 ``review_filter_ret`` 为 CSV。
+
+        :param path: 输出路径，默认 ``/tmp/review_filter_ret.csv``
+        """
+        _cli_pull_table_to_tmp_csv("review_filter_ret", path)
+
 
     # ----- 六张表：本地 → 云端  -----
+    def push_all(self):
+        self.push_backtest_filter_ret()
+        self.push_backtest_ret()
+        self.push_qlib_score_filter_ret()
+        self.push_qlib_score_ret()
+        self.push_review_filter_ret()
+        self.push_review_ret()
 
     def push_backtest_filter_ret(
         self,
