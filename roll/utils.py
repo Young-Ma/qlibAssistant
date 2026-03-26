@@ -274,18 +274,20 @@ def get_local_data_date(provider_uri):
 
 def fix_mlflow_paths(mlruns_dir: Optional[str] = None):
     """精准修复 MLflow 配置文件中的用户路径"""
-    current_home = str(Path.home())
-    current_prefix = f"file://{current_home}"
+    # 使用 as_posix() 确保在 Windows 下也是正斜杠，避免正则替换时的 \U 转义错误
+    current_home = Path.home().as_posix()
+    # MLflow URI 在 Windows 上通常使用 file:///C:/... 格式（3个斜杠）
+    current_prefix = f"file:///{current_home.lstrip('/')}"
 
     if mlruns_dir is None:
-        mlruns_dir = os.path.join(current_home, ".qlibAssistant", "mlruns")
+        mlruns_dir = Path.home() / ".qlibAssistant" / "mlruns"
 
     base_path = Path(mlruns_dir).expanduser().resolve()
     if not base_path.exists():
         logger.warning(f"目录不存在: {base_path}")
         return
 
-    logger.info(f"正在修复 MLflow 路径前缀为: {current_home}")
+    logger.info(f"正在修复 MLflow 路径前缀为: {current_prefix}")
 
     fix_count = 0
     for root, _, files in os.walk(base_path):
